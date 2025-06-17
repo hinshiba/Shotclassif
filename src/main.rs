@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use image::ImageReader;
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame, Terminal,
@@ -16,7 +16,7 @@ use ratatui_image::{picker::Picker, protocol::StatefulProtocol, StatefulImage};
 use serde::Deserialize;
 use std::{
     collections::HashMap,
-    fs::{self},
+    fs,
     io::{self, Stdout},
     path::{Path, PathBuf},
     time::Duration,
@@ -36,34 +36,21 @@ struct App {
     config: Config,
     should_quit: bool,
     last_action_message: String,
+    image_changed: bool,
+    picker: Picker,
 }
 
 impl App {
     fn new(config: Config) -> Result<Self> {
-        // 画像形式
-        let img_extensions = ["jpg", "jpeg", "png", "gif", "bmp"];
         let dir = Path::new(&config.dir);
-        if !dir.exists() {
+        if !dir.exists() || !dir.is_dir() {
             return Err(anyhow::anyhow!("dir is not valid: {}", config.dir));
         }
 
-        let images: Vec<PathBuf> = fs::read_dir(dir)
-            .with_context(|| format!("cannot read dir: {}", config.dir))?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.is_file()
-                    && path
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map_or(false, |ext| {
-                            img_extensions.contains(&ext.to_lowercase().as_str())
-                        })
-            })
-            .collect();
+        let images = find_images_in_dir(dir)?;
 
         if images.is_empty() {
-            return Err(anyhow::anyhow!("dir is empty: {}", config.dir));
+            return Err(anyhow::anyhow!("no images found in dir: {}", config.dir));
         }
 
         Ok(Self {
@@ -73,9 +60,12 @@ impl App {
             config,
             should_quit: false,
             last_action_message: String::new(),
+            image_changed: true, // 最初の画像を読み込むためにtrueに設定
+            picker: Picker::from_query_stdio().unwrap_or(Picker::from_fontsize((8, 14))),
         })
     }
 
+    /// キー入力に基づいてアクションを実行する
     fn on_key(&mut self, key: char) -> Result<()> {
         if let Some(dist) = self.config.dists.get(&key) {
             // "skip" は特別扱い
@@ -83,66 +73,75 @@ impl App {
                 self.last_action_message =
                     format!("skip: {}", self.get_imgname().unwrap_or_default());
                 self.next_image();
-                return Ok(());
+            } else {
+                self.move_current_image(&dist.clone())?;
+                self.next_image();
             }
-
-            self.move_current_image(&dist.clone())?;
-            self.next_image();
         }
         Ok(())
     }
 
+    /// 現在の画像を新しいディレクトリに移動する
     fn move_current_image(&mut self, dist: &str) -> Result<()> {
         if self.is_finished() {
             return Ok(());
         }
 
-        let now_imgpath = &self.images[self.idx];
-        let file_name = now_imgpath.file_name().context("failed get file neme")?;
+        let current_image_path = &self.images[self.idx];
+        let file_name = current_image_path
+            .file_name()
+            .context("Failed to get file name")?;
 
         let dist = Path::new(dist);
         fs::create_dir_all(dist)
-            .with_context(|| format!("dist create failed: {}", dist.display()))?;
+            .with_context(|| format!("Failed to create dist directory: {}", dist.display()))?;
 
-        let new_imgpath = dist.join(file_name);
+        let new_image_path = dist.join(file_name);
 
-        fs::rename(now_imgpath, &new_imgpath).with_context(|| {
+        fs::rename(current_image_path, &new_image_path).with_context(|| {
             format!(
-                "move failed from: {}; to: {};",
-                now_imgpath.display(),
-                new_imgpath.display()
+                "Failed to move image from {} to {}",
+                current_image_path.display(),
+                new_image_path.display()
             )
         })?;
 
         self.last_action_message = format!(
-            "move: {}",
-            dist.file_name()
-                .context("failed get file neme")?
-                .to_str()
-                .context("failed convert file neme to str")?
+            "move: {} -> {}",
+            file_name.to_string_lossy(),
+            dist.display()
         );
 
         Ok(())
     }
 
+    /// 次の画像へインデックスを進める
     fn next_image(&mut self) {
         if !self.is_finished() {
             self.idx += 1;
+            self.image_changed = true; // 画像が変更されたことをマーク
         }
     }
 
+    /// すべての画像の処理が完了したか
     fn is_finished(&self) -> bool {
         self.idx >= self.images.len()
     }
 
-    fn set_imgstate(&mut self) -> Result<()> {
-        let picker = Picker::from_fontsize((8, 12));
-        let path = self.images.get(self.idx).unwrap();
-        let dyn_img = ImageReader::open(path)?.decode()?;
-        self.imgstate = Some(picker.new_resize_protocol(dyn_img));
+    /// 表示する画像の状態を更新する
+    fn update_imgstate(&mut self) -> Result<()> {
+        if self.image_changed && !self.is_finished() {
+            let picker = &self.picker;
+            if let Some(path) = self.images.get(self.idx) {
+                let dyn_img = ImageReader::open(path)?.decode()?;
+                self.imgstate = Some(picker.new_resize_protocol(dyn_img));
+            }
+            self.image_changed = false; // フラグをリセット
+        }
         Ok(())
     }
 
+    /// 現在の画像ファイル名を取得する
     fn get_imgname(&self) -> Option<String> {
         self.images
             .get(self.idx)
@@ -151,10 +150,31 @@ impl App {
     }
 }
 
+/// 指定されたディレクトリから画像ファイルの一覧を取得する
+fn find_images_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
+    let img_extensions = ["jpg", "jpeg", "png", "gif", "bmp"];
+    let images = fs::read_dir(dir)
+        .with_context(|| format!("cannot read dir: {}", dir.display()))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map_or(false, |ext| {
+                        img_extensions.contains(&ext.to_lowercase().as_str())
+                    })
+        })
+        .collect();
+    Ok(images)
+}
+
 fn main() -> Result<()> {
-    // config読み込み
-    let config_str = fs::read_to_string("config.toml").context("config.toml not found")?;
-    let config: Config = toml::from_str(&config_str).context("config.toml not valid toml")?;
+    // 設定ファイルの読み込み
+    let config_str =
+        fs::read_to_string("config.toml").context("config.toml not found or unreadable")?;
+    let config: Config = toml::from_str(&config_str).context("config.toml is not valid toml")?;
 
     let mut app = App::new(config)?;
 
@@ -165,7 +185,6 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // メインループ
     let res = run_app(&mut terminal, &mut app);
 
     // 終了処理
@@ -178,7 +197,7 @@ fn main() -> Result<()> {
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        println!("error occurred: {:?}", err);
+        eprintln!("error occurred: {:?}", err);
         Err(err)
     } else {
         println!("exit successfully");
@@ -186,87 +205,103 @@ fn main() -> Result<()> {
     }
 }
 
+/// メインループ
 fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     loop {
+        // 必要に応じて画像データを更新
+        app.update_imgstate()?;
+
         // UIの描画
-        let _ = app.set_imgstate();
         terminal.draw(|f| ui(f, app))?;
 
         // イベントのポーリング
-        if event::poll(Duration::from_millis(250))? {
+        if event::poll(Duration::from_millis(100))? {
+            // キーが押された瞬間のみを捉える
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => app.should_quit = true,
-                    KeyCode::Char(c) => app.on_key(c)?,
-                    _ => {}
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Char('q') => app.should_quit = true,
+                        KeyCode::Char(c) => app.on_key(c)?,
+                        _ => {}
+                    }
                 }
             }
         }
 
         if app.should_quit || app.is_finished() {
+            // 終了前に最後の状態を描画するため少し待つ
+            if app.is_finished() {
+                terminal.draw(|f| ui(f, app))?;
+                std::thread::sleep(Duration::from_secs(1));
+            }
             return Ok(());
         }
     }
 }
 
+/// UIを描画する
 fn ui(f: &mut Frame, app: &mut App) {
-    // 画像情報とキーバインド表示に分割
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(f.area());
 
-    // 画像とその情報
-    let img_chunks = Layout::default()
+    draw_image_panel(f, app, main_chunks[0]);
+    draw_info_panel(f, app, main_chunks[1]);
+}
+
+/// 画像表示エリアを描画する
+fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),    // 画像(可変領域)
-            Constraint::Length(3), // ファイル情報
-        ])
-        .split(main_chunks[0]);
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(area);
 
     let image_block = Block::default().title("Image").borders(Borders::ALL);
-    f.render_widget(image_block, img_chunks[0]);
+    f.render_widget(image_block, chunks[0]);
 
     if app.is_finished() {
-        let centered_rect = centered_rect(60, 20, img_chunks[0]);
-        let all_done_text = Paragraph::new("all image done !!")
+        let done_block = Block::default().borders(Borders::ALL).title("Done");
+        let text = Paragraph::new("All images have been sorted!")
             .style(Style::default().fg(Color::Green))
-            .block(Block::default().borders(Borders::ALL).title("done"))
-            .wrap(Wrap { trim: true })
-            .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(all_done_text, centered_rect);
-    } else {
-        let centered_rect = centered_rect(60, 20, img_chunks[0]);
+            .block(done_block)
+            .alignment(Alignment::Center);
+        f.render_widget(text, centered_rect(60, 20, chunks[0]));
+    } else if let Some(state) = app.imgstate.as_mut() {
         let image = StatefulImage::default();
-        let state = app.imgstate.as_mut().unwrap();
-        f.render_stateful_widget(image, centered_rect, state);
+        f.render_stateful_widget(image, chunks[0], state);
     }
 
     let file_info_text = format!(
-        "file: {}\nprogress: {} / {}",
+        "File: {}\nProgress: {} / {}",
         app.get_imgname().unwrap_or_else(|| "N/A".to_string()),
-        app.idx + 1,
+        if app.is_finished() {
+            app.idx
+        } else {
+            app.idx + 1
+        },
         app.images.len()
     );
     let file_info_widget =
         Paragraph::new(file_info_text).block(Block::default().title("Info").borders(Borders::ALL));
-    f.render_widget(file_info_widget, img_chunks[1]);
+    f.render_widget(file_info_widget, chunks[1]);
+}
 
-    // --- 右側領域（キーバインドとログ） ---
-    let info_chunks = Layout::default()
+/// 情報エリアを描画する
+fn draw_info_panel(f: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
-        .split(main_chunks[1]);
+        .constraints([Constraint::Length(10), Constraint::Min(0)])
+        .split(area);
 
-    // キーバインドのリストを作成
+    // キーバインド
     let mut key_items: Vec<ListItem> = app
         .config
         .dists
         .iter()
         .map(|(key, folder)| {
             let text = format!("[{}] -> {}", key, folder);
-            let style = if folder.to_lowercase() == "skip" {
+            let style = if folder.eq_ignore_ascii_case("skip") {
                 Style::default().fg(Color::Yellow)
             } else {
                 Style::default().fg(Color::Cyan)
@@ -278,18 +313,18 @@ fn ui(f: &mut Frame, app: &mut App) {
     key_items.push(ListItem::new("[q] -> exit").style(Style::default().fg(Color::Red)));
 
     let keys_widget = List::new(key_items)
-        .block(Block::default().title("keybind").borders(Borders::ALL))
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
-        .highlight_symbol("> ");
-    f.render_widget(keys_widget, info_chunks[0]);
+        .block(Block::default().title("Keybinds").borders(Borders::ALL))
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+    f.render_widget(keys_widget, chunks[0]);
 
     // アクションログ
     let log_widget = Paragraph::new(app.last_action_message.as_str())
         .block(Block::default().title("Last Action").borders(Borders::ALL))
         .wrap(Wrap { trim: true });
-    f.render_widget(log_widget, info_chunks[1]);
+    f.render_widget(log_widget, chunks[1]);
 }
 
+/// 指定された矩形の中央に、指定されたパーセンテージの矩形を生成する
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
