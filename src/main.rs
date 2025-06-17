@@ -15,7 +15,7 @@ use ratatui::{
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, StatefulImage};
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     io::{self, Stdout},
     path::{Path, PathBuf},
@@ -207,6 +207,7 @@ fn main() -> Result<()> {
 
 /// メインループ
 fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
+    let mut pressed_keys: HashSet<KeyCode> = HashSet::new();
     loop {
         // 必要に応じて画像データを更新
         app.update_imgstate()?;
@@ -215,13 +216,29 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
         terminal.draw(|f| ui(f, app))?;
 
         // イベントのポーリング
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(Duration::from_millis(10))? {
             // キーが押された瞬間のみを捉える
+
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') => app.should_quit = true,
-                        KeyCode::Char(c) => app.on_key(c)?,
+                        KeyCode::Char(c) => {
+                            if !pressed_keys.contains(&key.code) {
+                                app.on_key(c)?;
+                                pressed_keys.insert(key.code);
+                            }
+                        }
+                        _ => {}
+                    }
+                } else if key.kind == KeyEventKind::Release {
+                    match key.code {
+                        KeyCode::Char('q') => app.should_quit = true,
+                        KeyCode::Char(_) => {
+                            if pressed_keys.contains(&key.code) {
+                                pressed_keys.remove(&key.code);
+                            }
+                        }
                         _ => {}
                     }
                 }
