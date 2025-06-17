@@ -58,3 +58,9 @@ dir = "C:/Users/YourUser/Pictures/Unsorted"
 - より高速な画像表示
 
 ## ライセンス
+
+MIT License
+
+(C) 2025 hinshiba
+
+[LICENSE](LICENSE)
