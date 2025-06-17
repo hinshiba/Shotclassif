@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -98,13 +98,17 @@ impl App {
 
         let new_image_path = dist.join(file_name);
 
-        fs::rename(current_image_path, &new_image_path).with_context(|| {
-            format!(
-                "Failed to move image from {} to {}",
-                current_image_path.display(),
-                new_image_path.display()
-            )
-        })?;
+        if !new_image_path.exists() {
+            fs::rename(current_image_path, &new_image_path).with_context(|| {
+                format!(
+                    "Failed to move image from {} to {}",
+                    current_image_path.display(),
+                    new_image_path.display()
+                )
+            })?;
+        } else {
+            return Err(anyhow!("move distination has same name file"));
+        }
 
         self.last_action_message = format!(
             "move: {} -> {}",
@@ -233,7 +237,6 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
                     }
                 } else if key.kind == KeyEventKind::Release {
                     match key.code {
-                        KeyCode::Char('q') => app.should_quit = true,
                         KeyCode::Char(_) => {
                             if pressed_keys.contains(&key.code) {
                                 pressed_keys.remove(&key.code);
