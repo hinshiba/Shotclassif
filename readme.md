@@ -27,7 +27,7 @@ cargo build --release
 
 ### 実行
 
-実行ファイルと同じディレクトリに`config.toml`という名前で設定ファイルを作成してください．
+`config.toml`という名前で設定ファイルを作成してください．
 ```toml
 # 分類したい画像が格納されているディレクトリ
 dir = "C:/Users/YourUser/Pictures/Unsorted"
@@ -44,7 +44,7 @@ dir = "C:/Users/YourUser/Pictures/Unsorted"
 # "q" = "not work"
 ```
 
-`shotclassif.exe`をターミナルで実行してください．
+`shotclassif.exe "path\to\config.toml"`をターミナルで実行してください．
 
 `q`キーで終了します．
 
@@ -56,7 +56,6 @@ dir = "C:/Users/YourUser/Pictures/Unsorted"
 
 ## Todo
 
-- config.tomlをコマンドラインで指定できるようにする
 - Undo機能の実装
 - より高速な画像表示
 

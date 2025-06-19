@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -21,6 +22,13 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(help = "path to config.toml", value_name = "FILE")]
+    config: Option<PathBuf>,
+}
 
 /// TOML file structure
 #[derive(Deserialize, Debug)]
@@ -175,9 +183,11 @@ fn find_images_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+
     // 設定ファイルの読み込み
-    let config_str =
-        fs::read_to_string("config.toml").context("config.toml not found or unreadable")?;
+    let config_str = fs::read_to_string(cli.config.unwrap_or("config.toml".into()))
+        .context("config.toml not found or unreadable")?;
     let config: Config = toml::from_str(&config_str).context("config.toml is not valid toml")?;
 
     let mut app = App::new(config)?;
