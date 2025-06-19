@@ -1,8 +1,8 @@
-# Shotclassif
+# shotclassif
 
 ## 概要
 
-ShotclassifはTUIでの画像整理ツールです．
+shotclassifはTUIでの画像整理ツールです．
 
 キーボードショートカットを用いて高速に画像を複数のフォルダに分類することができます．
 
@@ -27,7 +27,7 @@ cargo build --release
 
 ### 実行
 
-実行ファイルと同じディレクトリに`config.toml`という名前で設定ファイルを作成してください．
+`config.toml`という名前で設定ファイルを作成してください．
 ```toml
 # 分類したい画像が格納されているディレクトリ
 dir = "C:/Users/YourUser/Pictures/Unsorted"
@@ -44,16 +44,18 @@ dir = "C:/Users/YourUser/Pictures/Unsorted"
 # "q" = "not work"
 ```
 
-`shotclassif.exe`をターミナルで実行してください．
+`shotclassif.exe "path\to\config.toml"`をターミナルで実行してください．
 
 `q`キーで終了します．
 
 移動先に同名のファイルが存在する場合は，上書きを避けるため移動されません．
 
+### Tips
+
+カレントディレクトリを操作対象にするには，`dir = "./"`としましょう．
+
 ## Todo
 
-- config.tomlをコマンドラインで指定できるようにする
-- カレントディレクトリを操作対象にする
 - Undo機能の実装
 - より高速な画像表示
 
@@ -64,3 +66,12 @@ MIT License
 (C) 2025 hinshiba
 
 [LICENSE](LICENSE)
+
+## 変更履歴
+
+### v0.2.0 2025-06-19
+
+- 画像の読み込みやデコードを別スレッドで行うように
+- config.tomlの場所をコマンドライン引数で指定できるように
+- カレントディレクトリの操作についてreadme.mdを追記
+- 先頭のsを小文字に

@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -18,9 +19,23 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     io::{self, Stdout},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
+    sync::{mpsc::Receiver, Arc},
     time::Duration,
 };
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    thread::available_parallelism,
+};
+use std::{sync::mpsc::sync_channel, thread};
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(help = "path to config.toml", value_name = "FILE")]
+    config: Option<PathBuf>,
+}
 
 /// TOML file structure
 #[derive(Deserialize, Debug)]
@@ -29,40 +44,32 @@ struct Config {
     dists: HashMap<char, String>,
 }
 
-struct App {
-    images: Vec<PathBuf>,
-    imgstate: Option<StatefulProtocol>,
+struct ProcessedImg {
+    state: StatefulProtocol,
     idx: usize,
+}
+
+struct App<'a> {
+    recver: Receiver<ProcessedImg>,
+    images: &'a Vec<PathBuf>,
+    processed_num: usize,
+    current_img: Option<ProcessedImg>,
     config: Config,
     should_quit: bool,
     last_action_message: String,
-    image_changed: bool,
-    picker: Picker,
 }
 
-impl App {
-    fn new(config: Config) -> Result<Self> {
-        let dir = Path::new(&config.dir);
-        if !dir.exists() || !dir.is_dir() {
-            return Err(anyhow::anyhow!("dir is not valid: {}", config.dir));
-        }
-
-        let images = find_images_in_dir(dir)?;
-
-        if images.is_empty() {
-            return Err(anyhow::anyhow!("no images found in dir: {}", config.dir));
-        }
-
-        Ok(Self {
+impl<'a> App<'a> {
+    fn new(config: Config, recver: Receiver<ProcessedImg>, images: &'a Vec<PathBuf>) -> Self {
+        Self {
+            recver,
             images,
-            imgstate: None,
-            idx: 0,
+            processed_num: 0,
+            current_img: None,
             config,
             should_quit: false,
             last_action_message: String::new(),
-            image_changed: true, // 最初の画像を読み込むためにtrueに設定
-            picker: Picker::from_query_stdio().unwrap_or(Picker::from_fontsize((8, 14))),
-        })
+        }
     }
 
     /// キー入力に基づいてアクションを実行する
@@ -70,24 +77,19 @@ impl App {
         if let Some(dist) = self.config.dists.get(&key) {
             // "skip" は特別扱い
             if dist == "skip" {
-                self.last_action_message =
-                    format!("skip: {}", self.get_imgname().unwrap_or_default());
-                self.next_image();
+                self.last_action_message = format!("skip: {}", self.get_imgname().display());
             } else {
                 self.move_current_image(&dist.clone())?;
-                self.next_image();
             }
         }
+        let _ = self.update_imgstate();
+        self.processed_num += 1;
         Ok(())
     }
 
     /// 現在の画像を新しいディレクトリに移動する
     fn move_current_image(&mut self, dist: &str) -> Result<()> {
-        if self.is_finished() {
-            return Ok(());
-        }
-
-        let current_image_path = &self.images[self.idx];
+        let current_image_path = self.get_imgname();
         let file_name = current_image_path
             .file_name()
             .context("Failed to get file name")?;
@@ -119,38 +121,15 @@ impl App {
         Ok(())
     }
 
-    /// 次の画像へインデックスを進める
-    fn next_image(&mut self) {
-        if !self.is_finished() {
-            self.idx += 1;
-            self.image_changed = true; // 画像が変更されたことをマーク
-        }
-    }
-
-    /// すべての画像の処理が完了したか
-    fn is_finished(&self) -> bool {
-        self.idx >= self.images.len()
-    }
-
-    /// 表示する画像の状態を更新する
+    /// 新しい画像にする
     fn update_imgstate(&mut self) -> Result<()> {
-        if self.image_changed && !self.is_finished() {
-            let picker = &self.picker;
-            if let Some(path) = self.images.get(self.idx) {
-                let dyn_img = ImageReader::open(path)?.decode()?;
-                self.imgstate = Some(picker.new_resize_protocol(dyn_img));
-            }
-            self.image_changed = false; // フラグをリセット
-        }
+        let res = self.recver.recv()?;
+        self.current_img = Some(res);
         Ok(())
     }
 
-    /// 現在の画像ファイル名を取得する
-    fn get_imgname(&self) -> Option<String> {
-        self.images
-            .get(self.idx)
-            .and_then(|p| p.file_name())
-            .map(|s| s.to_string_lossy().to_string())
+    fn get_imgname(&self) -> &PathBuf {
+        &self.images[self.current_img.as_ref().unwrap().idx]
     }
 }
 
@@ -175,12 +154,31 @@ fn find_images_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+
     // 設定ファイルの読み込み
-    let config_str =
-        fs::read_to_string("config.toml").context("config.toml not found or unreadable")?;
+    let config_str = fs::read_to_string(cli.config.unwrap_or("config.toml".into()))
+        .context("config.toml not found or unreadable")?;
     let config: Config = toml::from_str(&config_str).context("config.toml is not valid toml")?;
 
-    let mut app = App::new(config)?;
+    // 画像のパス一覧の取得
+    let dir = Path::new(&config.dir);
+    if !dir.exists() || !dir.is_dir() {
+        return Err(anyhow::anyhow!("dir is not valid: {}", config.dir));
+    }
+    let images = &find_images_in_dir(dir)?;
+    if images.is_empty() {
+        return Err(anyhow::anyhow!("no images found in dir: {}", config.dir));
+    }
+    let img_num = images.len();
+
+    // ワーカーの設定
+    let next_idx = Arc::new(AtomicUsize::new(0));
+    let worker_num = available_parallelism()
+        .unwrap_or(NonZeroUsize::new(1).unwrap())
+        .get();
+
+    let (tx, rx) = sync_channel::<ProcessedImg>(4);
 
     // ターミナル設定
     enable_raw_mode()?;
@@ -188,8 +186,42 @@ fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    let picker = Picker::from_query_stdio().unwrap_or(Picker::from_fontsize((8, 14)));
 
-    let res = run_app(&mut terminal, &mut app);
+    let res = thread::scope(|s| {
+        for _ in 0..worker_num {
+            let tx = tx.clone();
+            let next_idx = next_idx.clone();
+            let picker = picker.clone();
+
+            s.spawn(move || loop {
+                let idx = next_idx.fetch_add(1, Ordering::Relaxed);
+                if idx >= img_num {
+                    break;
+                }
+
+                // Stateを作成
+                let Ok(reader) = ImageReader::open(&images[idx]) else {
+                    eprintln!("cannot open file {}", images[idx].display());
+                    continue;
+                };
+
+                let Ok(dynamic_img) = reader.decode() else {
+                    eprintln!("cannot decpde image {}", images[idx].display());
+                    continue;
+                };
+
+                let state = picker.new_resize_protocol(dynamic_img);
+
+                if tx.send(ProcessedImg { state, idx }).is_err() {
+                    break;
+                }
+            });
+        }
+        drop(tx);
+        let mut app = App::new(config, rx, images);
+        run_app(&mut terminal, &mut app, images)
+    });
 
     // 終了処理
     disable_raw_mode()?;
@@ -199,7 +231,6 @@ fn main() -> Result<()> {
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
-
     if let Err(err) = res {
         eprintln!("error occurred: {:?}", err);
         Err(err)
@@ -210,14 +241,18 @@ fn main() -> Result<()> {
 }
 
 /// メインループ
-fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut App,
+    images: &Vec<PathBuf>,
+) -> Result<()> {
     let mut pressed_keys: HashSet<KeyCode> = HashSet::new();
+    let image_num = images.len();
+    // 必要に応じて画像データを更新
+    app.update_imgstate()?;
     loop {
-        // 必要に応じて画像データを更新
-        app.update_imgstate()?;
-
         // UIの描画
-        terminal.draw(|f| ui(f, app))?;
+        terminal.draw(|f| ui(f, app, false))?;
 
         // イベントのポーリング
         if event::poll(Duration::from_millis(10))? {
@@ -248,10 +283,10 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
             }
         }
 
-        if app.should_quit || app.is_finished() {
+        if app.should_quit || app.processed_num >= image_num {
             // 終了前に最後の状態を描画するため少し待つ
-            if app.is_finished() {
-                terminal.draw(|f| ui(f, app))?;
+            if app.processed_num >= image_num {
+                terminal.draw(|f| ui(f, app, true))?;
                 std::thread::sleep(Duration::from_secs(1));
             }
             return Ok(());
@@ -260,18 +295,18 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
 }
 
 /// UIを描画する
-fn ui(f: &mut Frame, app: &mut App) {
+fn ui(f: &mut Frame, app: &mut App, isfin: bool) {
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(f.area());
 
-    draw_image_panel(f, app, main_chunks[0]);
+    draw_image_panel(f, app, main_chunks[0], isfin);
     draw_info_panel(f, app, main_chunks[1]);
 }
 
 /// 画像表示エリアを描画する
-fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect, isfin: bool) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(3)])
@@ -280,26 +315,22 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let image_block = Block::default().title("Image").borders(Borders::ALL);
     f.render_widget(image_block, chunks[0]);
 
-    if app.is_finished() {
+    if isfin {
         let done_block = Block::default().borders(Borders::ALL).title("Done");
         let text = Paragraph::new("All images have been sorted!")
             .style(Style::default().fg(Color::Green))
             .block(done_block)
             .alignment(Alignment::Center);
         f.render_widget(text, centered_rect(60, 20, chunks[0]));
-    } else if let Some(state) = app.imgstate.as_mut() {
+    } else if let Some(processed) = &mut app.current_img {
         let image = StatefulImage::default();
-        f.render_stateful_widget(image, chunks[0], state);
+        f.render_stateful_widget(image, chunks[0], &mut processed.state);
     }
 
     let file_info_text = format!(
         "File: {}\nProgress: {} / {}",
-        app.get_imgname().unwrap_or_else(|| "N/A".to_string()),
-        if app.is_finished() {
-            app.idx
-        } else {
-            app.idx + 1
-        },
+        app.get_imgname().display(),
+        app.processed_num,
         app.images.len()
     );
     let file_info_widget =
