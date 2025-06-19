@@ -46,6 +46,8 @@ dir = "C:/Users/YourUser/Pictures/Unsorted"
 
 `shotclassif.exe "path\to\config.toml"`をターミナルで実行してください．
 
+`shotclassif.exe`と同じディレクトリに`config.toml`がある場合はパスを指定する必要はありません．
+
 `q`キーで終了します．
 
 移動先に同名のファイルが存在する場合は，上書きを避けるため移動されません．
