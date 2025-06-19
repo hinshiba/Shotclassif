@@ -1,5 +1,5 @@
 [package]
-name = "Shotclassif"
+name = "shotclassif"
 version = "0.1.0"
 edition = "2021"
 
