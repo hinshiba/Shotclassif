@@ -1,18 +1,19 @@
 use anyhow::{anyhow, Context, Result};
+use image::ImageReader;
 
 use std::{
     collections::HashMap,
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{
-        atomic::AtomicUsize,
+        atomic::{AtomicUsize, Ordering},
         mpsc::{sync_channel, Receiver, SyncSender},
         Arc,
     },
-    thread::available_parallelism,
+    thread::{self, available_parallelism, JoinHandle},
 };
 
-use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread};
 
 use crate::Config;
 
@@ -30,8 +31,8 @@ struct App {
     req_quit: bool,
 
     // privateより
-    next_idx: Arc<AtomicUsize>,
-    tx: SyncSender<ProcessedImg>,
+    // next_idx: Arc<AtomicUsize>,
+    handles: Vec<JoinHandle<()>>,
 }
 
 // struct App2<'a> {
@@ -47,7 +48,7 @@ struct App {
 const PROCESSED_IMG_BUFSIZE: usize = 7;
 
 impl App {
-    fn new(config: Config) -> Result<Self> {
+    pub fn new(config: Config) -> Result<Self> {
         // imagesの取得
         if !config.dir.is_dir() {
             return Err(anyhow!("dir is not valid: {}", config.dir.display()));
@@ -56,20 +57,58 @@ impl App {
         if imgs.is_empty() {
             return Err(anyhow!("no images found in dir: {}", config.dir.display()));
         }
+        let img_num = &imgs.len();
 
         // スレッド作成の準備
         let worker_num = match available_parallelism() {
-            Ok(n) => n.get(),
+            Ok(n) => n.get() - 1,
             Err(_) => 1,
         };
 
         let (tx, rx) = sync_channel::<ProcessedImg>(PROCESSED_IMG_BUFSIZE);
+        let picker = Picker::from_query_stdio().unwrap_or(Picker::from_fontsize((8, 14)));
+        let next_idx = Arc::new(AtomicUsize::new(0));
 
-        Some(App {
+        // スレッド作成
+        let mut handles: Vec<JoinHandle<()>>;
+        for _ in 0..worker_num {
+            let thread_tx = tx.clone();
+            // let thread_next_idx = next_idx.clone();
+            let thread_picker = picker.clone();
+            let handle = thread::spawn(move || loop {
+                let idx = next_idx.fetch_add(1, Ordering::Relaxed);
+                if &idx >= img_num {
+                    break;
+                }
+
+                // 画像処理
+                let Ok(reader) = ImageReader::open(&imgs[idx]) else {
+                    eprintln!("cannot open file {}", imgs[idx].display());
+                    continue;
+                };
+
+                let Ok(dynamic_img) = reader.decode() else {
+                    eprintln!("cannot decpde image {}", imgs[idx].display());
+                    continue;
+                };
+
+                let state = picker.new_resize_protocol(dynamic_img);
+
+                if tx.send(ProcessedImg { state, idx }).is_err() {
+                    break;
+                }
+            });
+            handles.push(handle);
+        }
+        drop(tx);
+
+        let app = App {
             config,
-            imgs,
-            next_idx: Arc::new(AtomicUsize::new(0)),
-        })
+            imgs: imgs.to_vec(),
+            handles,
+        };
+
+        return Ok(app);
     }
 }
 
