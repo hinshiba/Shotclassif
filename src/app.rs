@@ -2,12 +2,11 @@ use anyhow::{anyhow, Context, Result};
 use image::ImageReader;
 
 use std::{
-    collections::HashMap,
-    num::NonZeroUsize,
+    fs,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc::{sync_channel, Receiver, SyncSender},
+        mpsc::{sync_channel, Receiver},
         Arc,
     },
     thread::{self, available_parallelism, JoinHandle},
@@ -25,7 +24,7 @@ struct ProcessedImg {
 struct App {
     // viewmodelの作成に直接関係
     config: Config,
-    imgs: Vec<PathBuf>,
+    imgs: Arc<Vec<PathBuf>>,
     rx: Receiver<ProcessedImg>,
     progress: usize,
     req_quit: bool,
@@ -59,6 +58,10 @@ impl App {
         }
         let img_num = imgs.len();
 
+        // うまく使わない方法を模索している
+        // 不変参照かつAppのほうが長生きな気がするので
+        let imgs = Arc::new(imgs);
+
         // スレッド作成の準備
         let worker_num = match available_parallelism() {
             Ok(n) => n.get() - 1,
@@ -74,8 +77,8 @@ impl App {
         for _ in 0..worker_num {
             let thread_tx = tx.clone();
             let thread_next_idx = next_idx.clone();
+            let thread_imgs = imgs.clone();
             let thread_picker = picker.clone();
-            let thread_imgs = &imgs;
             let handle = thread::spawn(move || loop {
                 let idx = thread_next_idx.fetch_add(1, Ordering::Relaxed);
                 if idx >= img_num {
@@ -105,7 +108,7 @@ impl App {
 
         let app = App {
             config,
-            imgs,
+            imgs: imgs,
             rx,
             progress: 0,
             req_quit: false,
@@ -114,6 +117,8 @@ impl App {
 
         return Ok(app);
     }
+
+    fn run(&mut self) {}
 }
 
 impl Drop for App {
