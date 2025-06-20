@@ -1,9 +1,15 @@
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 
 use std::{
     collections::HashMap,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
-    sync::mpsc::Receiver,
+    sync::{
+        atomic::AtomicUsize,
+        mpsc::{sync_channel, Receiver, SyncSender},
+        Arc,
+    },
+    thread::available_parallelism,
 };
 
 use ratatui_image::protocol::StatefulProtocol;
@@ -16,11 +22,16 @@ struct ProcessedImg {
 }
 
 struct App {
+    // viewmodelの作成に直接関係
     config: Config,
     imgs: Vec<PathBuf>,
     rx: Receiver<ProcessedImg>,
     progress: usize,
     req_quit: bool,
+
+    // privateより
+    next_idx: Arc<AtomicUsize>,
+    tx: SyncSender<ProcessedImg>,
 }
 
 // struct App2<'a> {
@@ -33,18 +44,32 @@ struct App {
 //     last_action_message: String,
 // }
 
+const PROCESSED_IMG_BUFSIZE: usize = 7;
+
 impl App {
     fn new(config: Config) -> Result<Self> {
         // imagesの取得
-        let dir = Path::new(&config.dir);
-        if !dir.is_dir() {
-            return Err(anyhow::anyhow!("dir is not valid: {}", config.dir));
+        if !config.dir.is_dir() {
+            return Err(anyhow!("dir is not valid: {}", config.dir.display()));
         }
-        let images = &find_images_in_dir(dir)?;
-        if images.is_empty() {
-            return Err(anyhow::anyhow!("no images found in dir: {}", config.dir));
+        let imgs = &find_images_in_dir(&config.dir)?;
+        if imgs.is_empty() {
+            return Err(anyhow!("no images found in dir: {}", config.dir.display()));
         }
-        let img_num = images.len();
+
+        // スレッド作成の準備
+        let worker_num = match available_parallelism() {
+            Ok(n) => n.get(),
+            Err(_) => 1,
+        };
+
+        let (tx, rx) = sync_channel::<ProcessedImg>(PROCESSED_IMG_BUFSIZE);
+
+        Some(App {
+            config,
+            imgs,
+            next_idx: Arc::new(AtomicUsize::new(0)),
+        })
     }
 }
 

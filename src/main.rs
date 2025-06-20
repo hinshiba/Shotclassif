@@ -56,25 +56,6 @@ fn main() -> Result<()> {
         .context("config.toml not found or unreadable")?;
     let config: Config = toml::from_str(&config_str).context("config.toml is not valid toml")?;
 
-    // 画像のパス一覧の取得
-    let dir = Path::new(&config.dir);
-    if !dir.exists() || !dir.is_dir() {
-        return Err(anyhow::anyhow!("dir is not valid: {}", config.dir));
-    }
-    let images = &find_images_in_dir(dir)?;
-    if images.is_empty() {
-        return Err(anyhow::anyhow!("no images found in dir: {}", config.dir));
-    }
-    let img_num = images.len();
-
-    // ワーカーの設定
-    let next_idx = Arc::new(AtomicUsize::new(0));
-    let worker_num = available_parallelism()
-        .unwrap_or(NonZeroUsize::new(1).unwrap())
-        .get();
-
-    let (tx, rx) = sync_channel::<ProcessedImg>(4);
-
     // ターミナル設定
     enable_raw_mode()?;
     let mut stdout = io::stdout();
