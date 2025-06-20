@@ -3,9 +3,12 @@ use anyhow::Result;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::mpsc::Receiver,
 };
 
 use ratatui_image::protocol::StatefulProtocol;
+
+use crate::Config;
 
 struct ProcessedImg {
     state: StatefulProtocol,
@@ -13,10 +16,10 @@ struct ProcessedImg {
 }
 
 struct App {
+    config: Config,
+    imgs: Vec<PathBuf>,
     rx: Receiver<ProcessedImg>,
     progress: usize,
-    img_num: usize,
-    config: Config,
     req_quit: bool,
 }
 
@@ -29,6 +32,21 @@ struct App {
 //     should_quit: bool,
 //     last_action_message: String,
 // }
+
+impl App {
+    fn new(config: Config) -> Result<Self> {
+        // imagesの取得
+        let dir = Path::new(&config.dir);
+        if !dir.is_dir() {
+            return Err(anyhow::anyhow!("dir is not valid: {}", config.dir));
+        }
+        let images = &find_images_in_dir(dir)?;
+        if images.is_empty() {
+            return Err(anyhow::anyhow!("no images found in dir: {}", config.dir));
+        }
+        let img_num = images.len();
+    }
+}
 
 // impl<'a> App2<'a> {
 //     fn new(config: Config, recver: Receiver<ProcessedImg>, images: &'a Vec<PathBuf>) -> Self {
