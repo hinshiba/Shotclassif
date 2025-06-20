@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use image::ImageReader;
 
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -21,18 +22,30 @@ struct ProcessedImg {
     idx: usize,
 }
 
-struct App {
+pub struct App {
     // viewmodelの作成に直接関係
     config: Config,
     imgs: Arc<Vec<PathBuf>>,
     rx: Receiver<ProcessedImg>,
-    progress: usize,
-    req_quit: bool,
-
+    pub progress: usize,
+    pub log: Option<AppLog>,
     // privateより
     // next_idx: Arc<AtomicUsize>,
     handles: Vec<JoinHandle<()>>,
 }
+
+pub struct ImgInfo {
+    pub state: StatefulProtocol,
+    pub path: PathBuf,
+}
+
+pub struct AppInfo {
+    pub img_num: usize,
+    pub keybind: HashMap<char, PathBuf>,
+}
+
+#[derive(Clone, Copy)]
+pub enum AppLog {}
 
 // struct App2<'a> {
 //     recver: Receiver<ProcessedImg>,
@@ -111,14 +124,32 @@ impl App {
             imgs: imgs,
             rx,
             progress: 0,
-            req_quit: false,
+            log: None,
             handles,
         };
 
         return Ok(app);
     }
 
-    fn run(&mut self) {}
+    pub fn get_img(&mut self) -> Result<ImgInfo> {
+        match self.rx.recv() {
+            Ok(r) => {
+                self.progress += 1;
+                Ok(ImgInfo {
+                    state: r.state,
+                    path: self.imgs[r.idx].clone(),
+                })
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn get_app_info(&self) -> AppInfo {
+        AppInfo {
+            img_num: self.imgs.len(),
+            keybind: self.config.dists.clone(),
+        }
+    }
 }
 
 impl Drop for App {

@@ -30,6 +30,8 @@ use std::{
 };
 use std::{sync::mpsc::sync_channel, thread};
 
+use crate::app::App;
+
 pub mod app;
 pub mod ui;
 pub mod viewmodel;
@@ -62,42 +64,8 @@ fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let picker = Picker::from_query_stdio().unwrap_or(Picker::from_fontsize((8, 14)));
 
-    let res = thread::scope(|s| {
-        for _ in 0..worker_num {
-            let tx = tx.clone();
-            let next_idx = next_idx.clone();
-            let picker = picker.clone();
-
-            s.spawn(move || loop {
-                let idx = next_idx.fetch_add(1, Ordering::Relaxed);
-                if idx >= img_num {
-                    break;
-                }
-
-                // Stateを作成
-                let Ok(reader) = ImageReader::open(&images[idx]) else {
-                    eprintln!("cannot open file {}", images[idx].display());
-                    continue;
-                };
-
-                let Ok(dynamic_img) = reader.decode() else {
-                    eprintln!("cannot decpde image {}", images[idx].display());
-                    continue;
-                };
-
-                let state = picker.new_resize_protocol(dynamic_img);
-
-                if tx.send(ProcessedImg { state, idx }).is_err() {
-                    break;
-                }
-            });
-        }
-        drop(tx);
-        let mut app = App2::new(config, rx, images);
-        run_app(&mut terminal, &mut app, images)
-    });
+    let app = App::new(config)?;
 
     // 終了処理
     disable_raw_mode()?;
