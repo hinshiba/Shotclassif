@@ -13,7 +13,7 @@ use std::{
     thread::{self, available_parallelism, JoinHandle},
 };
 
-use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread};
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 
 use crate::Config;
 
@@ -53,11 +53,11 @@ impl App {
         if !config.dir.is_dir() {
             return Err(anyhow!("dir is not valid: {}", config.dir.display()));
         }
-        let imgs = &find_images_in_dir(&config.dir)?;
+        let imgs = find_images_in_dir(&config.dir)?;
         if imgs.is_empty() {
             return Err(anyhow!("no images found in dir: {}", config.dir.display()));
         }
-        let img_num = &imgs.len();
+        let img_num = imgs.len();
 
         // スレッド作成の準備
         let worker_num = match available_parallelism() {
@@ -70,31 +70,32 @@ impl App {
         let next_idx = Arc::new(AtomicUsize::new(0));
 
         // スレッド作成
-        let mut handles: Vec<JoinHandle<()>>;
+        let mut handles: Vec<JoinHandle<()>> = Vec::new();
         for _ in 0..worker_num {
             let thread_tx = tx.clone();
-            // let thread_next_idx = next_idx.clone();
+            let thread_next_idx = next_idx.clone();
             let thread_picker = picker.clone();
+            let thread_imgs = &imgs;
             let handle = thread::spawn(move || loop {
-                let idx = next_idx.fetch_add(1, Ordering::Relaxed);
-                if &idx >= img_num {
+                let idx = thread_next_idx.fetch_add(1, Ordering::Relaxed);
+                if idx >= img_num {
                     break;
                 }
 
                 // 画像処理
-                let Ok(reader) = ImageReader::open(&imgs[idx]) else {
-                    eprintln!("cannot open file {}", imgs[idx].display());
+                let Ok(reader) = ImageReader::open(&thread_imgs[idx]) else {
+                    eprintln!("cannot open file {}", thread_imgs[idx].display());
                     continue;
                 };
 
                 let Ok(dynamic_img) = reader.decode() else {
-                    eprintln!("cannot decpde image {}", imgs[idx].display());
+                    eprintln!("cannot decpde image {}", thread_imgs[idx].display());
                     continue;
                 };
 
-                let state = picker.new_resize_protocol(dynamic_img);
+                let state = thread_picker.new_resize_protocol(dynamic_img);
 
-                if tx.send(ProcessedImg { state, idx }).is_err() {
+                if thread_tx.send(ProcessedImg { state, idx }).is_err() {
                     break;
                 }
             });
@@ -104,11 +105,22 @@ impl App {
 
         let app = App {
             config,
-            imgs: imgs.to_vec(),
+            imgs,
+            rx,
+            progress: 0,
+            req_quit: false,
             handles,
         };
 
         return Ok(app);
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        while let Some(handle) = self.handles.pop() {
+            handle.join().unwrap();
+        }
     }
 }
 
