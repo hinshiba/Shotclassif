@@ -67,7 +67,9 @@ fn main() -> Result<()> {
                         KeyCode::Char('q') => break,
                         KeyCode::Char(c) => {
                             if !pressed_keys.contains(&key.code) {
-                                viewmodel.on_key(app, c)?;
+                                let Ok(_) = viewmodel.on_key(app, c) else {
+                                    continue;
+                                };
                                 pressed_keys.insert(key.code);
                             }
                         }
