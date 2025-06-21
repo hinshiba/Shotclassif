@@ -27,10 +27,9 @@ pub struct App {
     config: Config,
     imgs: Arc<Vec<PathBuf>>,
     rx: Receiver<ProcessedImg>,
-    pub progress: usize,
     pub log: Option<AppLog>,
-    // privateより
-    // next_idx: Arc<AtomicUsize>,
+
+    idx: usize,
     handles: Vec<JoinHandle<()>>,
 }
 
@@ -44,8 +43,11 @@ pub struct AppInfo {
     pub keybind: HashMap<char, PathBuf>,
 }
 
-#[derive(Clone, Copy)]
-pub enum AppLog {}
+#[derive(Clone)]
+pub enum AppLog {
+    MoveSucesss(PathBuf, PathBuf),
+    Skip(PathBuf),
+}
 
 // struct App2<'a> {
 //     recver: Receiver<ProcessedImg>,
@@ -123,8 +125,8 @@ impl App {
             config,
             imgs: imgs,
             rx,
-            progress: 0,
             log: None,
+            idx: 0,
             handles,
         };
 
@@ -133,13 +135,13 @@ impl App {
 
     pub fn get_img(&mut self) -> Result<ImgInfo> {
         match self.rx.recv() {
-            Ok(r) => {
-                self.progress += 1;
-                Ok(ImgInfo {
+            Ok(r) => Ok({
+                self.idx = r.idx;
+                ImgInfo {
                     state: r.state,
                     path: self.imgs[r.idx].clone(),
-                })
-            }
+                }
+            }),
             Err(e) => Err(e.into()),
         }
     }
@@ -149,6 +151,49 @@ impl App {
             img_num: self.imgs.len(),
             keybind: self.config.dists.clone(),
         }
+    }
+
+    /// キー入力に基づいてアクションを実行する
+    pub fn on_key(&mut self, key: char) -> Result<()> {
+        if let Some(dist) = self.config.dists.get(&key) {
+            // "skip" は特別扱い
+            if dist == Path::new("skip") {
+                self.log = Some(AppLog::Skip(
+                    self.imgs[self.idx]
+                        .file_name()
+                        .context("skip filename cannot get")?
+                        .into(),
+                ));
+            } else {
+                let log = self.move_img(dist, &self.imgs[self.idx])?;
+                self.log = Some(log);
+            }
+        }
+        Ok(())
+    }
+
+    /// 現在の画像を新しいディレクトリに移動する
+    fn move_img(&self, dist: &Path, src: &Path) -> Result<AppLog> {
+        let file_name = src.file_name().context("Failed to get file name")?;
+
+        fs::create_dir_all(dist)
+            .with_context(|| format!("Failed to create dist directory: {}", dist.display()))?;
+
+        let dest = dist.join(file_name);
+
+        if !dest.exists() {
+            fs::rename(src, &dest).with_context(|| {
+                format!(
+                    "Failed to move image from {} to {}",
+                    src.display(),
+                    dest.display()
+                )
+            })?;
+        } else {
+            return Err(anyhow!("move distination has same name file"));
+        }
+
+        Ok(AppLog::MoveSucesss(file_name.into(), dest))
     }
 }
 

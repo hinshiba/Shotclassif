@@ -1,36 +1,22 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use image::ImageReader;
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
-    Frame, Terminal,
-};
-use ratatui_image::{picker::Picker, protocol::StatefulProtocol, StatefulImage};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use serde::Deserialize;
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{self, Stdout},
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-    sync::{mpsc::Receiver, Arc},
+    io::{self},
+    path::PathBuf,
     time::Duration,
 };
-use std::{
-    sync::atomic::{AtomicUsize, Ordering},
-    thread::available_parallelism,
-};
-use std::{sync::mpsc::sync_channel, thread};
 
-use crate::app::App;
+use crate::viewmodel::ViewModel;
+use crate::{app::App, ui::ui};
 
 pub mod app;
 pub mod ui;
@@ -45,7 +31,7 @@ struct Cli {
 
 /// TOML file structure
 #[derive(Deserialize, Debug)]
-struct Config {
+pub struct Config {
     dir: PathBuf,
     dists: HashMap<char, PathBuf>,
 }
@@ -65,50 +51,23 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let app = App::new(config)?;
-
-    // 終了処理
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-    if let Err(err) = res {
-        eprintln!("error occurred: {:?}", err);
-        Err(err)
-    } else {
-        println!("exit successfully");
-        Ok(())
-    }
-}
-
-/// メインループ
-fn run_app(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    app: &mut App2,
-    images: &Vec<PathBuf>,
-) -> Result<()> {
+    let app = &mut App::new(config)?;
+    let viewmodel = &mut ViewModel::new_from_app(app)?;
     let mut pressed_keys: HashSet<KeyCode> = HashSet::new();
-    let image_num = images.len();
-    // 必要に応じて画像データを更新
-    app.update_imgstate()?;
+    // メインループ
     loop {
-        // UIの描画
-        terminal.draw(|f| viewmodel(f, app, false))?;
+        // 描画
+        terminal.draw(|f| ui(f, viewmodel))?;
 
         // イベントのポーリング
         if event::poll(Duration::from_millis(10))? {
-            // キーが押された瞬間のみを捉える
-
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
-                        KeyCode::Char('q') => app.should_quit = true,
+                        KeyCode::Char('q') => break,
                         KeyCode::Char(c) => {
                             if !pressed_keys.contains(&key.code) {
-                                app.on_key(c)?;
+                                viewmodel.on_key(app, c)?;
                                 pressed_keys.insert(key.code);
                             }
                         }
@@ -126,14 +85,16 @@ fn run_app(
                 }
             }
         }
-
-        if app.should_quit || app.processed_num >= image_num {
-            // 終了前に最後の状態を描画するため少し待つ
-            if app.processed_num >= image_num {
-                terminal.draw(|f| viewmodel(f, app, true))?;
-                std::thread::sleep(Duration::from_secs(1));
-            }
-            return Ok(());
-        }
     }
+
+    // 終了処理
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    Ok(())
 }
