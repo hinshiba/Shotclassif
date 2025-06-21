@@ -46,7 +46,7 @@ pub struct AppInfo {
 
 #[derive(Clone)]
 pub enum AppLog {
-    MoveSucesss(PathBuf, PathBuf),
+    MoveSuccess(PathBuf, PathBuf),
     Skip(PathBuf),
 }
 
@@ -194,7 +194,7 @@ impl App {
             return Err(anyhow!("move distination has same name file"));
         }
 
-        Ok(AppLog::MoveSucesss(file_name.into(), dest))
+        Ok(AppLog::MoveSuccess(file_name.into(), dest))
     }
 }
 

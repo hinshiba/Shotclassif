@@ -86,7 +86,7 @@ fn draw_info_panel(f: &mut Frame, vm: &ViewModel, area: Rect) {
     // ログ
     if let Some(log) = &vm.log {
         let log_widget = Paragraph::new(match log {
-            AppLog::MoveSucesss(file, dest) => {
+            AppLog::MoveSuccess(file, dest) => {
                 format!("{} to {}", file.display(), dest.display())
             }
             AppLog::Skip(file) => format!("Skip {}", file.display()),
