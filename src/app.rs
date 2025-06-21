@@ -50,16 +50,6 @@ pub enum AppLog {
     Skip(PathBuf),
 }
 
-// struct App2<'a> {
-//     recver: Receiver<ProcessedImg>,
-//     images: &'a Vec<PathBuf>,
-//     processed_num: usize,
-//     current_img: Option<ProcessedImg>,
-//     config: Config,
-//     should_quit: bool,
-//     last_action_message: String,
-// }
-
 const PROCESSED_IMG_BUFSIZE: usize = 7;
 
 impl App {
@@ -205,80 +195,6 @@ impl Drop for App {
         }
     }
 }
-
-// impl<'a> App2<'a> {
-//     fn new(config: Config, recver: Receiver<ProcessedImg>, images: &'a Vec<PathBuf>) -> Self {
-//         Self {
-//             recver,
-//             images,
-//             processed_num: 0,
-//             current_img: None,
-//             config,
-//             should_quit: false,
-//             last_action_message: String::new(),
-//         }
-//     }
-
-//     /// キー入力に基づいてアクションを実行する
-//     fn on_key(&mut self, key: char) -> Result<()> {
-//         if let Some(dist) = self.config.dists.get(&key) {
-//             // "skip" は特別扱い
-//             if dist == "skip" {
-//                 self.last_action_message = format!("skip: {}", self.get_imgname().display());
-//             } else {
-//                 self.move_current_image(&dist.clone())?;
-//             }
-//         }
-//         let _ = self.update_imgstate();
-//         self.processed_num += 1;
-//         Ok(())
-//     }
-
-//     /// 現在の画像を新しいディレクトリに移動する
-//     fn move_current_image(&mut self, dist: &str) -> Result<()> {
-//         let current_image_path = self.get_imgname();
-//         let file_name = current_image_path
-//             .file_name()
-//             .context("Failed to get file name")?;
-
-//         let dist = Path::new(dist);
-//         fs::create_dir_all(dist)
-//             .with_context(|| format!("Failed to create dist directory: {}", dist.display()))?;
-
-//         let new_image_path = dist.join(file_name);
-
-//         if !new_image_path.exists() {
-//             fs::rename(current_image_path, &new_image_path).with_context(|| {
-//                 format!(
-//                     "Failed to move image from {} to {}",
-//                     current_image_path.display(),
-//                     new_image_path.display()
-//                 )
-//             })?;
-//         } else {
-//             return Err(anyhow!("move distination has same name file"));
-//         }
-
-//         self.last_action_message = format!(
-//             "move: {} -> {}",
-//             file_name.to_string_lossy(),
-//             dist.display()
-//         );
-
-//         Ok(())
-//     }
-
-//     /// 新しい画像にする
-//     fn update_imgstate(&mut self) -> Result<()> {
-//         let res = self.recver.recv()?;
-//         self.current_img = Some(res);
-//         Ok(())
-//     }
-
-//     fn get_imgname(&self) -> &PathBuf {
-//         &self.images[self.current_img.as_ref().unwrap().idx]
-//     }
-// }
 
 /// 指定されたディレクトリから画像ファイルの一覧を取得する
 fn find_images_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
