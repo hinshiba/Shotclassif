@@ -43,12 +43,12 @@ impl ViewModel {
             Ok(img_info) => {
                 self.img = img_info.state;
                 self.img_path = img_info.path;
+                self.progress += 1;
             }
             Err(_) => {
                 self.is_fin = true;
             }
         };
-        self.progress += 1;
         self.log = app.log.clone();
         Ok(())
     }
