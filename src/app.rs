@@ -191,7 +191,9 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         while let Some(handle) = self.handles.pop() {
-            handle.join().unwrap();
+            if let Err(e) = handle.join() {
+                eprintln!("error in thread {:?}", e);
+            }
         }
     }
 }
