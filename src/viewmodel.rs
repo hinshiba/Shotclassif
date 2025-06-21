@@ -38,12 +38,18 @@ impl ViewModel {
 
     pub fn on_key(&mut self, app: &mut App, key: char) -> Result<()> {
         app.on_key(key)?;
-        let img_info = app.get_img()?;
-        self.img = img_info.state;
-        self.img_path = img_info.path;
+        let img_info = app.get_img();
+        match img_info {
+            Ok(img_info) => {
+                self.img = img_info.state;
+                self.img_path = img_info.path;
+            }
+            Err(_) => {
+                self.is_fin = true;
+            }
+        };
         self.progress += 1;
         self.log = app.log.clone();
-        self.is_fin = self.progress >= self.img_num;
         Ok(())
     }
 }
