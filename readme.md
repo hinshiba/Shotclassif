@@ -33,7 +33,7 @@ cargo build --release
 dir = "C:/Users/YourUser/Pictures/Unsorted"
 
 # キーと分類先ディレクトリのマッピング
-[dists]
+[dests]
 # "a"キーを押すと"hoge/huga"に移動
 "a" = "hoge/huga"
 # "b"キーを押すと "./temp" に移動
