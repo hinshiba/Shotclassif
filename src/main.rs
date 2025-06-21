@@ -33,7 +33,7 @@ struct Cli {
 #[derive(Deserialize, Debug)]
 pub struct Config {
     dir: PathBuf,
-    dists: HashMap<char, PathBuf>,
+    dests: HashMap<char, PathBuf>,
 }
 
 fn main() -> Result<()> {

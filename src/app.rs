@@ -140,15 +140,15 @@ impl App {
     pub fn get_app_info(&self) -> AppInfo {
         AppInfo {
             img_num: self.imgs.len(),
-            keybind: self.config.dists.clone(),
+            keybind: self.config.dests.clone(),
         }
     }
 
     /// キー入力に基づいてアクションを実行する
     pub fn on_key(&mut self, key: char) -> Result<()> {
-        if let Some(dist) = self.config.dists.get(&key) {
+        if let Some(dest) = self.config.dests.get(&key) {
             // "skip" は特別扱い
-            if dist == Path::new("skip") {
+            if dest == Path::new("skip") {
                 self.log = Some(AppLog::Skip(
                     self.imgs[self.idx]
                         .file_name()
@@ -156,7 +156,7 @@ impl App {
                         .into(),
                 ));
             } else {
-                let log = self.move_img(dist, &self.imgs[self.idx])?;
+                let log = self.move_img(dest, &self.imgs[self.idx])?;
                 self.log = Some(log);
             }
         }
@@ -164,13 +164,14 @@ impl App {
     }
 
     /// 現在の画像を新しいディレクトリに移動する
-    fn move_img(&self, dist: &Path, src: &Path) -> Result<AppLog> {
+    fn move_img(&self, dest: &Path, src: &Path) -> Result<AppLog> {
         let file_name = src.file_name().context("Failed to get file name")?;
 
-        fs::create_dir_all(dist)
-            .with_context(|| format!("Failed to create dist directory: {}", dist.display()))?;
+        fs::create_dir_all(dest).with_context(|| {
+            format!("Failed to create destination directory: {}", dest.display())
+        })?;
 
-        let dest = dist.join(file_name);
+        let dest = dest.join(file_name);
 
         if !dest.exists() {
             fs::rename(src, &dest).with_context(|| {
@@ -181,7 +182,7 @@ impl App {
                 )
             })?;
         } else {
-            return Err(anyhow!("move distination has same name file"));
+            return Err(anyhow!("move destination has same name file"));
         }
 
         Ok(AppLog::MoveSuccess(file_name.into(), dest))
