@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use image::ImageReader;
 
 use std::{
+    cmp::max,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -79,7 +80,7 @@ impl App {
 
         // スレッド作成の準備
         let worker_num = match available_parallelism() {
-            Ok(n) => n.get() - 1,
+            Ok(n) => max(n.get() - 1, 1),
             Err(_) => 1,
         };
 
