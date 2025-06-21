@@ -2,6 +2,8 @@
 
 ## 概要
 
+![screenshot for demo](screenshot.png)
+
 shotclassifはTUIでの画像整理ツールです．
 
 キーボードショートカットを用いて高速に画像を複数のフォルダに分類することができます．
